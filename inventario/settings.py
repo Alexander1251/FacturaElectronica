@@ -129,12 +129,27 @@ DTE_URLS = {
         'recepcion': 'https://apitest.dtes.mh.gob.sv/fesv/recepciondte',
         'consulta': 'https://apitest.dtes.mh.gob.sv/fesv/recepcion/consultadte/',
         'anulacion': 'https://apitest.dtes.mh.gob.sv/fesv/anulardte',
+        'contingencia': 'https://apitest.dtes.mh.gob.sv/fesv/contingencia',  # NUEVO
     },
     'prod': {
         'auth': 'https://api.dtes.mh.gob.sv/seguridad/auth',
         'recepcion': 'https://api.dtes.mh.gob.sv/fesv/recepciondte', 
         'consulta': 'https://api.dtes.mh.gob.sv/fesv/recepcion/consultadte/',
         'anulacion': 'https://api.dtes.mh.gob.sv/fesv/anulardte',
+        'contingencia': 'https://apitest.dtes.mh.gob.sv/fesv/contingencia',  # NUEVO
+    }
+}
+
+CONTINGENCIA_CONFIG = {
+    'MAX_DOCUMENTOS_PRUEBA': 10,
+    'TIMEOUT_CONTINGENCIA': 60,
+    'TIPOS_DOCUMENTO_SOPORTADOS': ['01', '03', '05', '14'],
+    'TIPOS_CONTINGENCIA': {
+        1: 'Interrupción del suministro eléctrico',
+        2: 'Interrupción del servicio de Internet', 
+        3: 'Falla en el sistema informático del contribuyente',
+        4: 'Falla en el sistema del Ministerio de Hacienda',
+        5: 'Otras contingencias'
     }
 }
 
@@ -185,10 +200,10 @@ CRISPY_TEMPLATE_PACK = "bootstrap5"
 EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
 EMAIL_HOST = 'smtp.gmail.com'
 EMAIL_PORT = 587
-EMAIL_HOST_USER = 'inventario1251@gmail.com'
-EMAIL_HOST_PASSWORD = 'mslbskfytijgqfvm'
+EMAIL_HOST_USER = 'inventario221@gmail.com'
+EMAIL_HOST_PASSWORD = 'iotyvsbjcfdoicjr'
 EMAIL_USE_TLS = True
-DEFAULT_FROM_EMAIL = "Mi Empresa <inventario1251@gmail.com>"
+DEFAULT_FROM_EMAIL = "Mi Empresa <inventario221@gmail.com>"
 
 # Agregar a settings.py para ver los logs detallados
 
@@ -248,3 +263,8 @@ ANULACION_VALIDATIONS = {
 
 
 
+# Gmail API Configuration
+GMAIL_API_ENABLED = True  # Set to False to use Django's default email
+GMAIL_CREDENTIALS_FILE = os.path.join(BASE_DIR, 'gmail_credentials.json')  # Path to your credentials
+GMAIL_TOKEN_FILE = os.path.join(BASE_DIR, 'gmail_token.json')  # Path to store token
+GMAIL_SCOPES = ['https://www.googleapis.com/auth/gmail.send']

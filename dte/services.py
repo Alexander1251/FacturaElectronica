@@ -9,6 +9,7 @@ from typing import Dict, Any, List, Optional
 import logging
 from django.utils import timezone
 from .utils import build_dte_json
+from .gmail_service import GmailService
 
 logger = logging.getLogger(__name__)
 
@@ -34,55 +35,59 @@ class DTEService:
     def enviar_correo_factura_simplificado(self, factura, archivos_adjuntos: List[Dict[str, Any]]):
         """
         Envía la factura por correo electrónico al receptor (versión simplificada)
-        Solo para facturas que no se envían a Hacienda
+        ACTUALIZADO: Usa Gmail API si está disponible
         """
         try:
+            gmail_service = GmailService()
+            
             asunto = f"Factura {factura.identificacion.numeroControl} (Imprimible)"
             
             mensaje = f"""
-    Estimado/a {factura.receptor.nombre},
+    <html>
+    <body>
+    <p>Estimado/a {factura.receptor.nombre},</p>
 
-    Le enviamos el imprimible de su factura con los siguientes datos:
+    <p>Le enviamos el imprimible de su factura con los siguientes datos:</p>
 
-    Número de Control: {factura.identificacion.numeroControl}
-    Fecha de Emisión: {factura.identificacion.fecEmi}
-    Total: ${factura.resumen.totalPagar:.2f}
+    <ul>
+    <li><strong>Número de Control:</strong> {factura.identificacion.numeroControl}</li>
+    <li><strong>Fecha de Emisión:</strong> {factura.identificacion.fecEmi}</li>
+    <li><strong>Total:</strong> ${factura.resumen.totalPagar:.2f}</li>
+    </ul>
 
-    IMPORTANTE: Este documento NO tiene validez fiscal oficial ya que no fue enviado a Hacienda para su procesamiento.
+    <p><strong>IMPORTANTE:</strong> Este documento NO tiene validez fiscal oficial ya que no fue enviado a Hacienda para su procesamiento.</p>
 
-    Adjuntamos:
-    - Factura en formato PDF (versión imprimible)
+    <p>Adjuntamos:</p>
+    <ul>
+    <li>Factura en formato PDF (versión imprimible)</li>
+    </ul>
 
-    Saludos cordiales,
-    {factura.emisor.nombre}
-    NIT: {factura.emisor.nit}
+    <p>Saludos cordiales,<br>
+    {factura.emisor.nombre}<br>
+    NIT: {factura.emisor.nit}</p>
+    </body>
+    </html>
             """
             
-            email = EmailMessage(
-                subject=asunto,
-                body=mensaje,
-                from_email=settings.DEFAULT_FROM_EMAIL,
-                to=[factura.receptor.correo],
-                cc=[factura.emisor.correo] if factura.emisor.correo else []
+            # Intentar Gmail API primero
+            success = gmail_service.enviar_correo(
+                destinatario=factura.receptor.correo,
+                asunto=asunto,
+                cuerpo=mensaje,
+                archivos_adjuntos=archivos_adjuntos,
+                copia_oculta=[factura.emisor.correo] if factura.emisor.correo else None
             )
             
-            # Adjuntar archivos
-            for archivo in archivos_adjuntos:
-                email.attach(
-                    archivo['filename'],
-                    archivo['content'],
-                    archivo['mimetype']
-                )
-            
-            email.send(fail_silently=False)
-            
-            # Actualizar registro de envío
-            factura.enviado_por_correo = True
-            factura.fecha_envio_correo = timezone.localtime()
-            factura.save(update_fields=['enviado_por_correo', 'fecha_envio_correo'])
-            
-            logger.info(f"Factura simplificada enviada por correo a {factura.receptor.correo}")
-            
+            if success:
+                # Actualizar registro de envío
+                factura.enviado_por_correo = True
+                factura.fecha_envio_correo = timezone.localtime()
+                factura.save(update_fields=['enviado_por_correo', 'fecha_envio_correo'])
+                
+                logger.info(f"Factura simplificada enviada por correo a {factura.receptor.correo}")
+            else:
+                raise Exception("No se pudo enviar el correo con Gmail API ni con el sistema por defecto")
+                
         except Exception as e:
             logger.error(f"Error al enviar correo simplificado: {str(e)}")
             raise
@@ -441,9 +446,13 @@ class DTEService:
         """
         Envía la factura por correo electrónico al receptor
         Soporta FC, CCF y NC (Nota de Crédito)
-        CORREGIDO: Evita envío duplicado de JSON
+        ACTUALIZADO: Usa Gmail API con fallback a Django Email
         """
         try:
+            # Importar GmailService
+            from .gmail_service import GmailService
+            gmail_service = GmailService()
+            
             tipo_doc = factura.identificacion.tipoDte.codigo
             
             # Mapeo completo de tipos de documento
@@ -458,79 +467,136 @@ class DTEService:
             
             asunto = f"{doc_name} {factura.identificacion.numeroControl}"
             
-            # Mensaje personalizado según tipo de documento
+            # Mensaje personalizado según tipo de documento (CONVERTIDO A HTML)
             if tipo_doc == "05":  # Nota de Crédito
                 # Obtener información del documento relacionado
                 doc_relacionado = factura.documentos_relacionados.first()
                 doc_original_info = ""
                 if doc_relacionado:
                     doc_original_info = f"""
-    Documento Original: {doc_relacionado.tipoDocumento.texto}
-    Número Original: {doc_relacionado.numeroDocumento}
-    Fecha Original: {doc_relacionado.fechaEmision.strftime('%d/%m/%Y')}
-    """
+    <li><strong>Documento Original:</strong> {doc_relacionado.tipoDocumento.texto}</li>
+    <li><strong>Número Original:</strong> {doc_relacionado.numeroDocumento}</li>
+    <li><strong>Fecha Original:</strong> {doc_relacionado.fechaEmision.strftime('%d/%m/%Y')}</li>
+                    """
                 
                 # Obtener motivo si existe
                 motivo_info = ""
                 if hasattr(factura, 'nota_credito_detalle') and factura.nota_credito_detalle:
-                    motivo_info = f"Motivo: {factura.nota_credito_detalle.motivo_nota_credito}\n"
+                    motivo_info = f"<p><strong>Motivo:</strong> {factura.nota_credito_detalle.motivo_nota_credito}</p>"
                 
                 mensaje = f"""
-    Estimado/a {factura.receptor.nombre},
+    <html>
+    <body>
+    <p>Estimado/a {factura.receptor.nombre},</p>
 
-    Le enviamos su {doc_name.lower()} con los siguientes datos:
+    <p>Le enviamos su {doc_name.lower()} con los siguientes datos:</p>
 
-    Número de Control: {factura.identificacion.numeroControl}
-    Código de Generación: {factura.identificacion.codigoGeneracion}
-    Fecha de Emisión: {factura.identificacion.fecEmi}
-    Monto del Crédito: ${factura.resumen.totalPagar:.2f}
-    Estado: {factura.get_estado_hacienda_display()}
-
+    <ul>
+    <li><strong>Número de Control:</strong> {factura.identificacion.numeroControl}</li>
+    <li><strong>Código de Generación:</strong> {factura.identificacion.codigoGeneracion}</li>
+    <li><strong>Fecha de Emisión:</strong> {factura.identificacion.fecEmi}</li>
+    <li><strong>Monto del Crédito:</strong> ${factura.resumen.totalPagar:.2f}</li>
+    <li><strong>Estado:</strong> {factura.get_estado_hacienda_display()}</li>
     {doc_original_info}
+    </ul>
+
     {motivo_info}
-    Esta nota de crédito debe aplicarse según corresponda a su contabilidad.
 
-    Adjuntamos:
-    - {doc_name} en formato PDF (versión legible)
-    - Documento JSON con firma electrónica y sello de recepción
+    <p>Esta nota de crédito debe aplicarse según corresponda a su contabilidad.</p>
 
-    Puede verificar la autenticidad de este documento en:
-    https://admin.factura.gob.sv/consultaPublica
+    <p><strong>Adjuntamos:</strong></p>
+    <ul>
+    <li>{doc_name} en formato PDF (versión legible)</li>
+    <li>Documento JSON con firma electrónica y sello de recepción</li>
+    </ul>
 
-    Código de Generación para verificación: {factura.identificacion.codigoGeneracion}
-    {f'Sello de Recepción: {factura.sello_recepcion}' if factura.sello_recepcion else ''}
+    <p>Puede verificar la autenticidad de este documento en:<br>
+    <a href="https://admin.factura.gob.sv/consultaPublica">https://admin.factura.gob.sv/consultaPublica</a></p>
 
-    Saludos cordiales,
-    {factura.emisor.nombre}
-    NIT: {factura.emisor.nit}
+    <p><strong>Código de Generación para verificación:</strong> {factura.identificacion.codigoGeneracion}</p>
+    {"<p><strong>Sello de Recepción:</strong> " + factura.sello_recepcion + "</p>" if factura.sello_recepcion else ""}
+
+    <p>Saludos cordiales,<br>
+    {factura.emisor.nombre}<br>
+    NIT: {factura.emisor.nit}</p>
+    </body>
+    </html>
                 """
             else:
-                # Mensaje original para FC y CCF
+                # Mensaje para FC, CCF y FSE (CONVERTIDO A HTML)
                 mensaje = f"""
-    Estimado/a {factura.receptor.nombre},
+    <html>
+    <body>
+    <p>Estimado/a {factura.receptor.nombre},</p>
 
-    Le enviamos su {doc_name.lower()} con los siguientes datos:
+    <p>Le enviamos su {doc_name.lower()} con los siguientes datos:</p>
 
-    Número de Control: {factura.identificacion.numeroControl}
-    Código de Generación: {factura.identificacion.codigoGeneracion}
-    Fecha de Emisión: {factura.identificacion.fecEmi}
-    Total: ${factura.resumen.totalPagar:.2f}
-    Estado: {factura.get_estado_hacienda_display()}
+    <ul>
+    <li><strong>Número de Control:</strong> {factura.identificacion.numeroControl}</li>
+    <li><strong>Código de Generación:</strong> {factura.identificacion.codigoGeneracion}</li>
+    <li><strong>Fecha de Emisión:</strong> {factura.identificacion.fecEmi}</li>
+    <li><strong>Total:</strong> ${factura.resumen.totalPagar:.2f}</li>
+    <li><strong>Estado:</strong> {factura.get_estado_hacienda_display()}</li>
+    </ul>
 
-    Adjuntamos:
-    - {doc_name} en formato PDF (versión legible)
-    - Documento JSON con firma electrónica y sello de recepción
+    <p><strong>Adjuntamos:</strong></p>
+    <ul>
+    <li>{doc_name} en formato PDF (versión legible)</li>
+    <li>Documento JSON con firma electrónica y sello de recepción</li>
+    </ul>
 
-    Puede verificar la autenticidad de este documento en:
-    https://admin.factura.gob.sv/consultaPublica
+    <p>Puede verificar la autenticidad de este documento en:<br>
+    <a href="https://admin.factura.gob.sv/consultaPublica">https://admin.factura.gob.sv/consultaPublica</a></p>
 
-    Código de Generación para verificación: {factura.identificacion.codigoGeneracion}
-    {f'Sello de Recepción: {factura.sello_recepcion}' if factura.sello_recepcion else ''}
+    <p><strong>Código de Generación para verificación:</strong> {factura.identificacion.codigoGeneracion}</p>
+    {"<p><strong>Sello de Recepción:</strong> " + factura.sello_recepcion + "</p>" if factura.sello_recepcion else ""}
 
-    Saludos cordiales,
-    {factura.emisor.nombre}
-    NIT: {factura.emisor.nit}
+    <p>Saludos cordiales,<br>
+    {factura.emisor.nombre}<br>
+    NIT: {factura.emisor.nit}</p>
+    </body>
+    </html>
                 """
+            
+            # NUEVO: Intentar Gmail API primero, luego fallback a Django Email
+            success = gmail_service.enviar_correo(
+                destinatario=factura.receptor.correo,
+                asunto=asunto,
+                cuerpo=mensaje,
+                archivos_adjuntos=archivos_adjuntos,
+                copia_oculta=[factura.emisor.correo] if factura.emisor.correo else None
+            )
+            
+            if success:
+                # Actualizar registro de envío
+                factura.enviado_por_correo = True
+                factura.fecha_envio_correo = timezone.localtime()
+                factura.save(update_fields=['enviado_por_correo', 'fecha_envio_correo'])
+                
+                logger.info(f"{doc_name} enviado por correo a {factura.receptor.correo} usando Gmail API")
+            else:
+                # Si Gmail API falla, usar método original como último recurso
+                logger.warning(f"Gmail API falló, intentando método original para {doc_name}")
+                self._enviar_correo_django_fallback(factura, archivos_adjuntos, asunto, mensaje, doc_name)
+                
+        except Exception as e:
+            logger.error(f"Error al enviar correo: {str(e)}")
+            # Intentar método original como último recurso
+            try:
+                # Convertir HTML a texto plano para Django Email
+                import re
+                mensaje_texto = re.sub('<[^<]+?>', '', mensaje)  # Remover tags HTML básico
+                mensaje_texto = mensaje_texto.replace('&lt;', '<').replace('&gt;', '>').replace('&amp;', '&')
+                
+                self._enviar_correo_django_fallback(factura, archivos_adjuntos, asunto, mensaje_texto, doc_name)
+            except Exception as fallback_error:
+                logger.error(f"Error en fallback de Django Email: {str(fallback_error)}")
+                # No lanzar excepción para no interrumpir el proceso principal
+
+    def _enviar_correo_django_fallback(self, factura, archivos_adjuntos, asunto, mensaje, doc_name):
+        """Método de fallback usando Django Email (NUEVO MÉTODO AUXILIAR)"""
+        try:
+            from django.core.mail import EmailMessage
             
             email = EmailMessage(
                 subject=asunto,
@@ -540,8 +606,7 @@ class DTEService:
                 cc=[factura.emisor.correo] if factura.emisor.correo else []
             )
             
-            # CORRECCIÓN PRINCIPAL: Solo adjuntar los archivos que se pasan como parámetro
-            # Los archivos ya vienen con el JSON actualizado con firma y sello
+            # Adjuntar archivos
             for archivo in archivos_adjuntos:
                 email.attach(
                     archivo['filename'],
@@ -549,9 +614,6 @@ class DTEService:
                     archivo['mimetype']
                 )
             
-            # ELIMINADO: Ya no se genera ni adjunta JSON adicional aquí
-            # porque ya viene incluido en archivos_adjuntos
-                
             email.send(fail_silently=False)
             
             # Actualizar registro de envío
@@ -559,10 +621,11 @@ class DTEService:
             factura.fecha_envio_correo = timezone.localtime()
             factura.save(update_fields=['enviado_por_correo', 'fecha_envio_correo'])
             
-            logger.info(f"{doc_name} enviado por correo a {factura.receptor.correo}")
+            logger.info(f"{doc_name} enviado por correo a {factura.receptor.correo} usando Django Email (fallback)")
             
         except Exception as e:
-            logger.error(f"Error al enviar correo: {str(e)}")
+            logger.error(f"Error en Django Email fallback: {str(e)}")
+            raise
             # No lanzar excepción para no interrumpir el proceso principal
 
 
